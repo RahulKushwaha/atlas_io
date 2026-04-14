@@ -1,0 +1,13 @@
+[book]
+title = "Atlas I/O"
+description = "Centralized I/O service for thousands of RocksDB instances"
+authors = ["Atlas Team"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = ""
+edit-url-template = ""

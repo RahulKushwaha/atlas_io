@@ -1,0 +1,3 @@
+[workspace]
+members = ["atlas-protocol", "atlas-client", "atlas-service"]
+resolver = "3"

@@ -1,0 +1,29 @@
+[package]
+name = "atlas-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+atlas-protocol = { path = "../atlas-protocol" }
+bytemuck = { version = "1", features = ["derive"] }
+libc = "0.2"
+nix = { version = "0.29", features = ["mman", "fs"] }
+que = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+
+[dev-dependencies]
+atlas-client = { path = "../atlas-client" }
+criterion = { version = "0.5", features = ["html_reports"] }
+libc = "0.2"
+nix = { version = "0.29", features = ["mman"] }
+tempfile = "3"
+
+[[bench]]
+name = "executor_bench"
+harness = false
+
+[[bench]]
+name = "e2e_bench"
+harness = false
