@@ -1,5 +1,7 @@
 use bytemuck::{AnyBitPattern, NoUninit};
 
+pub mod spsc;
+
 pub const RING_CAPACITY: usize = 4096;
 pub const DATA_REGION_SIZE: usize = 64 * 1024 * 1024; // 64 MiB per instance
 pub const MAX_PATH_LEN: usize = 256;
@@ -31,9 +33,9 @@ impl IoOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum IoPriority {
-    Low = 0,       // compaction
-    High = 1,      // foreground reads
-    Critical = 2,  // WAL sync
+    Low = 0,      // compaction
+    High = 1,     // foreground reads
+    Critical = 2, // WAL sync
 }
 
 impl IoPriority {
@@ -104,18 +106,36 @@ impl IoRequest {
     }
 
     pub fn path_str(&self) -> &str {
-        let end = self.path.iter().position(|&b| b == 0).unwrap_or(MAX_PATH_LEN);
+        let end = self
+            .path
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(MAX_PATH_LEN);
         core::str::from_utf8(&self.path[..end]).unwrap_or("")
     }
 }
 
 impl IoResponse {
     pub fn ok(id: u64) -> Self {
-        Self { id, status: 0, _pad: [0; 4], fd: 0, data_offset: 0, data_len: 0 }
+        Self {
+            id,
+            status: 0,
+            _pad: [0; 4],
+            fd: 0,
+            data_offset: 0,
+            data_len: 0,
+        }
     }
 
     pub fn err(id: u64, status: i32) -> Self {
-        Self { id, status, _pad: [0; 4], fd: 0, data_offset: 0, data_len: 0 }
+        Self {
+            id,
+            status,
+            _pad: [0; 4],
+            fd: 0,
+            data_offset: 0,
+            data_len: 0,
+        }
     }
 }
 

@@ -23,7 +23,9 @@ pub struct BatchEngine {
 
 impl BatchEngine {
     pub fn new() -> Self {
-        Self { pending: Vec::with_capacity(256) }
+        Self {
+            pending: Vec::with_capacity(256),
+        }
     }
 
     pub fn add(&mut self, req: IoRequest, channel_idx: usize) {
@@ -74,11 +76,14 @@ impl BatchEngine {
 }
 
 fn merge_adjacent(ops: &mut Vec<TaggedRequest>, result: &mut Vec<MergedOp>) {
-    if ops.is_empty() { return; }
+    if ops.is_empty() {
+        return;
+    }
 
     // Sort by (channel_idx, fd, offset)
     ops.sort_by(|a, b| {
-        a.channel_idx.cmp(&b.channel_idx)
+        a.channel_idx
+            .cmp(&b.channel_idx)
             .then(a.req.fd.cmp(&b.req.fd))
             .then(a.req.offset.cmp(&b.req.offset))
     });
@@ -95,11 +100,14 @@ fn merge_adjacent(ops: &mut Vec<TaggedRequest>, result: &mut Vec<MergedOp>) {
         while j < ops.len() {
             let next = &ops[j];
             // Same channel and fd, and adjacent or overlapping
-            if next.channel_idx == ch_idx && next.req.fd == merged_req.fd && next.req.offset <= end {
+            if next.channel_idx == ch_idx && next.req.fd == merged_req.fd && next.req.offset <= end
+            {
                 let offset_within = (next.req.offset - merged_req.offset) as u32;
                 sources.push((next.req.id, offset_within, next.req.len));
                 let next_end = next.req.offset + next.req.len as u64;
-                if next_end > end { end = next_end; }
+                if next_end > end {
+                    end = next_end;
+                }
                 j += 1;
             } else {
                 break;
@@ -107,7 +115,11 @@ fn merge_adjacent(ops: &mut Vec<TaggedRequest>, result: &mut Vec<MergedOp>) {
         }
 
         merged_req.len = (end - merged_req.offset) as u32;
-        result.push(MergedOp { req: merged_req, channel_idx: ch_idx, sources });
+        result.push(MergedOp {
+            req: merged_req,
+            channel_idx: ch_idx,
+            sources,
+        });
         i = j;
     }
 }
@@ -122,11 +134,17 @@ mod tests {
         let mut engine = BatchEngine::new();
 
         let mut r1 = IoRequest::new(1, IoOp::Read, IoPriority::High);
-        r1.fd = 10; r1.offset = 0; r1.len = 4096; r1.data_offset = 0;
+        r1.fd = 10;
+        r1.offset = 0;
+        r1.len = 4096;
+        r1.data_offset = 0;
         engine.add(r1, 0);
 
         let mut r2 = IoRequest::new(2, IoOp::Read, IoPriority::High);
-        r2.fd = 10; r2.offset = 4096; r2.len = 4096; r2.data_offset = 4096;
+        r2.fd = 10;
+        r2.offset = 4096;
+        r2.len = 4096;
+        r2.data_offset = 4096;
         engine.add(r2, 0);
 
         let merged = engine.drain_merged();
@@ -140,11 +158,15 @@ mod tests {
         let mut engine = BatchEngine::new();
 
         let mut r1 = IoRequest::new(1, IoOp::Read, IoPriority::High);
-        r1.fd = 10; r1.offset = 0; r1.len = 4096;
+        r1.fd = 10;
+        r1.offset = 0;
+        r1.len = 4096;
         engine.add(r1, 0);
 
         let mut r2 = IoRequest::new(2, IoOp::Read, IoPriority::High);
-        r2.fd = 11; r2.offset = 0; r2.len = 4096;
+        r2.fd = 11;
+        r2.offset = 0;
+        r2.len = 4096;
         engine.add(r2, 0);
 
         let merged = engine.drain_merged();

@@ -23,7 +23,9 @@ impl AtlasClient {
     ///
     /// `new()` is a convenience that does prepare + sleep + connect.
     pub fn new(instance_id: u32) -> std::io::Result<Self> {
-        Ok(Self { channel: ClientChannel::create(instance_id)? })
+        Ok(Self {
+            channel: ClientChannel::create(instance_id)?,
+        })
     }
 
     /// Prepare shared memory (req ring + data). Service must start after this.
@@ -33,7 +35,9 @@ impl AtlasClient {
 
     /// Connect to the service (joins resp ring). Service must be running.
     pub fn connect(prepared: channel::PreparedChannel) -> std::io::Result<Self> {
-        Ok(Self { channel: prepared.connect()? })
+        Ok(Self {
+            channel: prepared.connect()?,
+        })
     }
 
     pub fn open(&mut self, path: &str, flags: u32) -> Result<u64, i32> {
@@ -41,46 +45,105 @@ impl AtlasClient {
         req.set_path(path);
         req.len = flags;
         let resp = self.channel.send_request(&req);
-        if resp.status != 0 { Err(resp.status) } else { Ok(resp.fd) }
+        if resp.status != 0 {
+            Err(resp.status)
+        } else {
+            Ok(resp.fd)
+        }
     }
 
     pub fn read(&mut self, fd: u64, buf: &mut [u8], offset: u64) -> Result<usize, i32> {
-        let data_off = self.channel.data.alloc(buf.len());
-        let mut req = IoRequest::new(next_id(), IoOp::Read, IoPriority::High);
-        req.fd = fd;
-        req.offset = offset;
-        req.len = buf.len() as u32;
-        req.data_offset = data_off;
-        let resp = self.channel.send_request(&req);
-        if resp.status != 0 { return Err(resp.status); }
-        let data = self.channel.data.read(resp.data_offset, resp.data_len as usize);
-        buf[..resp.data_len as usize].copy_from_slice(data);
-        Ok(resp.data_len as usize)
+        // Convenience path: delegate to read_with, copy shmem -> caller buf.
+        self.read_with(fd, buf.len(), offset, |data| {
+            let n = data.len();
+            buf[..n].copy_from_slice(data);
+            n
+        })
     }
 
     pub fn write(&mut self, fd: u64, buf: &[u8], offset: u64) -> Result<usize, i32> {
-        let data_off = self.channel.data.alloc(buf.len());
-        self.channel.data.write(data_off, buf);
+        // Convenience path: delegate to write_with, copy caller buf -> shmem.
+        self.write_with(fd, buf.len(), offset, |slot| {
+            slot.copy_from_slice(buf);
+        })
+    }
+
+    /// Zero-copy write: caller fills the shmem buffer directly via `fill`,
+    /// avoiding the caller-buf -> shmem memcpy that `write` incurs.
+    pub fn write_with<F>(&mut self, fd: u64, len: usize, offset: u64, fill: F) -> Result<usize, i32>
+    where
+        F: FnOnce(&mut [u8]),
+    {
+        let data_off = self.channel.data.alloc(len);
+        unsafe {
+            let slot =
+                std::slice::from_raw_parts_mut(self.channel.data.ptr().add(data_off as usize), len);
+            fill(slot);
+        }
         let mut req = IoRequest::new(next_id(), IoOp::Write, IoPriority::High);
         req.fd = fd;
         req.offset = offset;
-        req.len = buf.len() as u32;
+        req.len = len as u32;
         req.data_offset = data_off;
         let resp = self.channel.send_request(&req);
-        if resp.status != 0 { Err(resp.status) } else { Ok(resp.data_len as usize) }
+        if resp.status != 0 {
+            Err(resp.status)
+        } else {
+            Ok(resp.data_len as usize)
+        }
+    }
+
+    /// Zero-copy read: `consume` is invoked with a slice pointing into the
+    /// shmem data region. Saves the shmem -> caller-buf memcpy.
+    ///
+    /// The slice is only valid for the duration of the closure; after it
+    /// returns, the region is free to be reused by subsequent allocations.
+    pub fn read_with<F, R>(
+        &mut self,
+        fd: u64,
+        len: usize,
+        offset: u64,
+        consume: F,
+    ) -> Result<R, i32>
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let data_off = self.channel.data.alloc(len);
+        let mut req = IoRequest::new(next_id(), IoOp::Read, IoPriority::High);
+        req.fd = fd;
+        req.offset = offset;
+        req.len = len as u32;
+        req.data_offset = data_off;
+        let resp = self.channel.send_request(&req);
+        if resp.status != 0 {
+            return Err(resp.status);
+        }
+        let data = self
+            .channel
+            .data
+            .read(resp.data_offset, resp.data_len as usize);
+        Ok(consume(data))
     }
 
     pub fn sync(&mut self, fd: u64) -> Result<(), i32> {
         let mut req = IoRequest::new(next_id(), IoOp::Sync, IoPriority::Critical);
         req.fd = fd;
         let resp = self.channel.send_request(&req);
-        if resp.status != 0 { Err(resp.status) } else { Ok(()) }
+        if resp.status != 0 {
+            Err(resp.status)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn close(&mut self, fd: u64) -> Result<(), i32> {
         let mut req = IoRequest::new(next_id(), IoOp::Close, IoPriority::Low);
         req.fd = fd;
         let resp = self.channel.send_request(&req);
-        if resp.status != 0 { Err(resp.status) } else { Ok(()) }
+        if resp.status != 0 {
+            Err(resp.status)
+        } else {
+            Ok(())
+        }
     }
 }

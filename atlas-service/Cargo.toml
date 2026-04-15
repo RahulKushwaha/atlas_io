@@ -8,7 +8,6 @@ atlas-protocol = { path = "../atlas-protocol" }
 bytemuck = { version = "1", features = ["derive"] }
 libc = "0.2"
 nix = { version = "0.29", features = ["mman", "fs"] }
-que = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
@@ -26,4 +25,8 @@ harness = false
 
 [[bench]]
 name = "e2e_bench"
+harness = false
+
+[[bench]]
+name = "concurrent_bench"
 harness = false

@@ -19,7 +19,9 @@ pub unsafe extern "C" fn atlas_client_destroy(client: *mut AtlasClient) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atlas_client_open(
-    client: *mut AtlasClient, path: *const c_char, flags: u32,
+    client: *mut AtlasClient,
+    path: *const c_char,
+    flags: u32,
 ) -> i64 {
     let client = unsafe { &mut *client };
     let path = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or("");
@@ -31,7 +33,11 @@ pub unsafe extern "C" fn atlas_client_open(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atlas_client_read(
-    client: *mut AtlasClient, fd: u64, buf: *mut u8, offset: u64, len: u32,
+    client: *mut AtlasClient,
+    fd: u64,
+    buf: *mut u8,
+    offset: u64,
+    len: u32,
 ) -> i32 {
     let client = unsafe { &mut *client };
     let buf = unsafe { std::slice::from_raw_parts_mut(buf, len as usize) };
@@ -43,7 +49,11 @@ pub unsafe extern "C" fn atlas_client_read(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atlas_client_write(
-    client: *mut AtlasClient, fd: u64, buf: *const u8, offset: u64, len: u32,
+    client: *mut AtlasClient,
+    fd: u64,
+    buf: *const u8,
+    offset: u64,
+    len: u32,
 ) -> i32 {
     let client = unsafe { &mut *client };
     let buf = unsafe { std::slice::from_raw_parts(buf, len as usize) };

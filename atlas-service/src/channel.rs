@@ -1,16 +1,53 @@
+use atlas_protocol::spsc::{Consumer, Producer, SpscRing};
 use atlas_protocol::{
-    IoRequest, IoResponse, RING_CAPACITY, DATA_REGION_SIZE,
-    shm_req_name, shm_resp_name, shm_data_name,
+    DATA_REGION_SIZE, IoRequest, IoResponse, RING_CAPACITY, shm_data_name, shm_req_name,
+    shm_resp_name,
 };
 use nix::fcntl::OFlag;
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, shm_open};
 use nix::sys::stat::Mode;
-use que::lossless::{consumer::Consumer, producer::Producer};
 use std::num::NonZero;
 use std::os::fd::OwnedFd;
 
+type ReqRing = SpscRing<IoRequest, RING_CAPACITY>;
+type RespRing = SpscRing<IoResponse, RING_CAPACITY>;
 type ReqConsumer = Consumer<IoRequest, RING_CAPACITY>;
 type RespProducer = Producer<IoResponse, RING_CAPACITY>;
+
+fn map_shm_sized(fd: &OwnedFd, size: usize) -> std::io::Result<*mut u8> {
+    let ptr = unsafe {
+        mmap(
+            None,
+            NonZero::new(size).unwrap(),
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_SHARED,
+            fd,
+            0,
+        )
+        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?
+    };
+    Ok(ptr.as_ptr() as *mut u8)
+}
+
+fn open_existing_ring(name: &str, size: usize) -> std::io::Result<(OwnedFd, *mut u8)> {
+    let fd = shm_open(name, OFlag::O_RDWR, Mode::from_bits_truncate(0o600))
+        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    let ptr = map_shm_sized(&fd, size)?;
+    Ok((fd, ptr))
+}
+
+fn create_or_open_ring(name: &str, size: usize) -> std::io::Result<(OwnedFd, *mut u8)> {
+    let fd = shm_open(
+        name,
+        OFlag::O_CREAT | OFlag::O_RDWR,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    nix::unistd::ftruncate(&fd, size as i64)
+        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    let ptr = map_shm_sized(&fd, size)?;
+    Ok((fd, ptr))
+}
 
 pub struct DataRegion {
     ptr: *mut u8,
@@ -25,28 +62,42 @@ impl DataRegion {
         let fd = shm_open(name, OFlag::O_RDWR, Mode::from_bits_truncate(0o600))
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
         let ptr = unsafe {
-            mmap(None, NonZero::new(DATA_REGION_SIZE).unwrap(),
-                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                 MapFlags::MAP_SHARED, &fd, 0)
-                .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?
+            mmap(
+                None,
+                NonZero::new(DATA_REGION_SIZE).unwrap(),
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                MapFlags::MAP_SHARED,
+                &fd,
+                0,
+            )
+            .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?
         };
-        Ok(Self { ptr: ptr.as_ptr() as *mut u8, _fd: fd })
+        Ok(Self {
+            ptr: ptr.as_ptr() as *mut u8,
+            _fd: fd,
+        })
     }
 
     pub fn write(&self, offset: u32, data: &[u8]) {
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(offset as usize), data.len()) }
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(offset as usize), data.len())
+        }
     }
 
     pub fn read(&self, offset: u32, len: usize) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr.add(offset as usize), len) }
     }
 
-    pub fn ptr(&self) -> *mut u8 { self.ptr }
+    pub fn ptr(&self) -> *mut u8 {
+        self.ptr
+    }
 }
 
 pub struct ServiceChannel {
     req_rx: ReqConsumer,
+    _req_fd: OwnedFd,
     resp_tx: RespProducer,
+    _resp_fd: OwnedFd,
     pub data: DataRegion,
     pub instance_id: u32,
 }
@@ -57,17 +108,27 @@ impl ServiceChannel {
         let resp_name = shm_resp_name(instance_id);
         let data_name = shm_data_name(instance_id);
 
-        let req_rx = unsafe {
-            ReqConsumer::join_shmem(&req_name)
-                .map_err(|e| std::io::Error::other(format!("req shm join: {e:?}")))?
-        };
-        let resp_tx = unsafe {
-            RespProducer::join_or_create_shmem(&resp_name)
-                .map_err(|e| std::io::Error::other(format!("resp shm: {e:?}")))?
-        };
+        // Request ring was created by the client in `PreparedChannel::create`.
+        let (req_fd, req_ptr) = open_existing_ring(&req_name, ReqRing::size_bytes())?;
+        let req_ring = unsafe { ReqRing::attach(req_ptr) }
+            .map_err(|e| std::io::Error::other(format!("req ring attach: {e}")))?;
+        let req_rx = unsafe { ReqConsumer::new(req_ring) };
+
+        // Response ring is created by the service and joined by the client later.
+        let (resp_fd, resp_ptr) = create_or_open_ring(&resp_name, RespRing::size_bytes())?;
+        let resp_ring = unsafe { RespRing::init_in_place(resp_ptr) };
+        let resp_tx = unsafe { RespProducer::new(resp_ring) };
+
         let data = DataRegion::join(&data_name)?;
 
-        Ok(Self { req_rx, resp_tx, data, instance_id })
+        Ok(Self {
+            req_rx,
+            _req_fd: req_fd,
+            resp_tx,
+            _resp_fd: resp_fd,
+            data,
+            instance_id,
+        })
     }
 
     pub fn poll_request(&mut self) -> Option<IoRequest> {
@@ -77,7 +138,7 @@ impl ServiceChannel {
     pub fn send_response(&mut self, resp: &IoResponse) {
         loop {
             match self.resp_tx.push(resp) {
-                Ok(()) => { self.resp_tx.sync(); return; }
+                Ok(()) => return,
                 Err(_) => std::thread::yield_now(),
             }
         }
@@ -87,8 +148,8 @@ impl ServiceChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_client::channel::{PreparedChannel, cleanup_shm};
     use atlas_protocol::{IoOp, IoPriority, IoRequest, IoResponse};
-    use atlas_client::channel::{cleanup_shm, PreparedChannel};
 
     fn setup(id: u32) -> (atlas_client::channel::ClientChannel, ServiceChannel) {
         cleanup_shm(id);
@@ -111,23 +172,22 @@ mod tests {
         let id = 6001;
         let (mut client, mut svc) = setup(id);
 
-        // Client sends request, service receives it
         let handle = std::thread::spawn(move || {
             let mut req = IoRequest::new(42, IoOp::Open, IoPriority::High);
             req.set_path("/tmp/test.dat");
             client.send_request(&req)
         });
 
-        // Service polls until it gets the request
         let req = loop {
-            if let Some(r) = svc.poll_request() { break r; }
+            if let Some(r) = svc.poll_request() {
+                break r;
+            }
             std::thread::yield_now();
         };
         assert_eq!(req.id, 42);
         assert_eq!(req.io_op(), Some(IoOp::Open));
         assert_eq!(req.path_str(), "/tmp/test.dat");
 
-        // Service sends response back
         let mut resp = IoResponse::ok(42);
         resp.fd = 7;
         svc.send_response(&resp);
@@ -155,7 +215,9 @@ mod tests {
 
         for _ in 0..10 {
             let req = loop {
-                if let Some(r) = svc.poll_request() { break r; }
+                if let Some(r) = svc.poll_request() {
+                    break r;
+                }
                 std::thread::yield_now();
             };
             svc.send_response(&IoResponse::ok(req.id));
@@ -170,11 +232,9 @@ mod tests {
         let id = 6003;
         let (client, svc) = setup(id);
 
-        // Client writes to data region, service reads it
         client.data.write(0, b"from_client");
         assert_eq!(svc.data.read(0, 11), b"from_client");
 
-        // Service writes, client reads
         svc.data.write(64, b"from_service");
         assert_eq!(client.data.read(64, 12), b"from_service");
         cleanup_shm(id);
@@ -191,7 +251,9 @@ mod tests {
         });
 
         let req = loop {
-            if let Some(r) = svc.poll_request() { break r; }
+            if let Some(r) = svc.poll_request() {
+                break r;
+            }
             std::thread::yield_now();
         };
         svc.send_response(&IoResponse::err(req.id, -libc::ENOENT));

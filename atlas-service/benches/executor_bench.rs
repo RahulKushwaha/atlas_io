@@ -1,5 +1,5 @@
 use atlas_service::executor::{IoExecutor, PosixExecutor};
-use criterion::{Criterion, BenchmarkId, criterion_group, criterion_main, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::os::fd::RawFd;
 
 fn setup_file(ex: &mut PosixExecutor, dir: &tempfile::TempDir, size: usize) -> (RawFd, String) {
@@ -96,19 +96,34 @@ fn bench_sequential_write(c: &mut Criterion) {
         let buf = vec![0xEFu8; chunk];
 
         group.throughput(Throughput::Bytes(total as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(num_chunks), &num_chunks, |b, &n| {
-            b.iter(|| {
-                let fd = ex.open(&path_str, libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC, 0o644) as RawFd;
-                for i in 0..n {
-                    ex.pwrite(fd, buf.as_ptr(), chunk, (i * chunk) as u64);
-                }
-                ex.fsync(fd);
-                ex.close(fd);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_chunks),
+            &num_chunks,
+            |b, &n| {
+                b.iter(|| {
+                    let fd = ex.open(
+                        &path_str,
+                        libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC,
+                        0o644,
+                    ) as RawFd;
+                    for i in 0..n {
+                        ex.pwrite(fd, buf.as_ptr(), chunk, (i * chunk) as u64);
+                    }
+                    ex.fsync(fd);
+                    ex.close(fd);
+                });
+            },
+        );
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_pread, bench_pwrite, bench_fsync, bench_open_close, bench_sequential_write);
+criterion_group!(
+    benches,
+    bench_pread,
+    bench_pwrite,
+    bench_fsync,
+    bench_open_close,
+    bench_sequential_write
+);
 criterion_main!(benches);

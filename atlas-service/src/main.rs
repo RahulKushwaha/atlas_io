@@ -1,7 +1,7 @@
 use atlas_service::executor::PosixExecutor;
 use atlas_service::service::AtlasService;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -10,7 +10,10 @@ fn main() {
 
     unsafe {
         libc::signal(libc::SIGINT, sig_handler as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, sig_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            sig_handler as *const () as libc::sighandler_t,
+        );
     }
 
     let r = running.clone();

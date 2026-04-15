@@ -1,5 +1,5 @@
-use atlas_protocol::IoPriority;
 use crate::batch::MergedOp;
+use atlas_protocol::IoPriority;
 use std::collections::VecDeque;
 
 pub struct Scheduler {
@@ -26,7 +26,9 @@ impl Scheduler {
     }
 
     pub fn enqueue_all(&mut self, ops: Vec<MergedOp>) {
-        for op in ops { self.enqueue(op); }
+        for op in ops {
+            self.enqueue(op);
+        }
     }
 
     /// Drain up to `max` ops in priority order: Critical > High > Low.
@@ -55,12 +57,16 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atlas_protocol::{IoOp, IoRequest};
     use crate::batch::MergedOp;
+    use atlas_protocol::{IoOp, IoRequest};
 
     fn make_op(id: u64, priority: IoPriority) -> MergedOp {
         let req = IoRequest::new(id, IoOp::Read, priority);
-        MergedOp { req, channel_idx: 0, sources: vec![(id, 0, 4096)] }
+        MergedOp {
+            req,
+            channel_idx: 0,
+            sources: vec![(id, 0, 4096)],
+        }
     }
 
     #[test]

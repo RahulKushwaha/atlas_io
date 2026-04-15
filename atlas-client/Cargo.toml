@@ -10,7 +10,6 @@ crate-type = ["lib", "cdylib", "staticlib"]
 atlas-protocol = { path = "../atlas-protocol" }
 bytemuck = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["mman", "fs"] }
-que = "0.4"
 
 [dev-dependencies]
 atlas-service = { path = "../atlas-service" }
